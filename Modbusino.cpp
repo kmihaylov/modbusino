@@ -61,7 +61,7 @@ ModbusinoSlave::ModbusinoSlave(uint8_t slave)
     }
 }
 
-void ModbusinoSlave::setup(long baud=SERIAL_BAUD_RATE)
+void ModbusinoSlave::setup(long bau)
 {
     Serial.begin(baud, SERIAL_8N1, SERIAL_FULL);
 	// When any transmission completes, set RE line inactive
