@@ -61,12 +61,12 @@ ModbusinoSlave::ModbusinoSlave(uint8_t slave)
     }
 }
 
-void ModbusinoSlave::setup(long baud)
+void ModbusinoSlave::setup(long baud=SERIAL_BAUD_RATE)
 {
-    Serial.begin(baud);
+    Serial.begin(baud, SERIAL_8N1, SERIAL_FULL);
 	// When any transmission completes, set RE line inactive
-		Serial.onTransmitComplete(
-			[](HardwareSerial &) { digitalWrite(RS485_RE_PIN, !RS485_TX_LEVEL); });
+	Serial.onTransmitComplete(
+		[](HardwareSerial &) { digitalWrite(RS485_RE_PIN, !RS485_TX_LEVEL); });
 }
 
 static int check_integrity(uint8_t *msg, uint8_t msg_length)
