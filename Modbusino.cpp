@@ -64,6 +64,9 @@ ModbusinoSlave::ModbusinoSlave(uint8_t slave)
 void ModbusinoSlave::setup(long baud)
 {
     Serial.begin(baud);
+	// When any transmission completes, set RE line inactive
+		Serial.onTransmitComplete(
+			[](HardwareSerial &) { digitalWrite(RS485_RE_PIN, !RS485_TX_LEVEL); });
 }
 
 static int check_integrity(uint8_t *msg, uint8_t msg_length)
@@ -100,11 +103,14 @@ static void send_msg(uint8_t *msg, uint8_t msg_length)
     msg[msg_length++] = crc >> 8;
     msg[msg_length++] = crc & 0x00FF;
 
-    digitalWrite(RS485_RE_PIN, RS485_TX_LEVEL);
-    delayMicroseconds(MB_PRE_TX_DELAY);
-    Serial.write(msg, msg_length);
-    delayMicroseconds(MB_POST_TX_DELAY);
-    digitalWrite(RS485_RE_PIN, ! RS485_TX_LEVEL);
+	// Set RE active, add a one-character delay before and after message
+	digitalWrite(RS485_RE_PIN, RS485_TX_LEVEL);
+	constexpr uint8_t NUL{0};
+	Serial.write(NUL);
+	Serial.write(msg, msg_length);
+	Serial.write(NUL);
+
+	// RE is set inactive by Serial transmit-complete callback
 }
 
 static uint8_t response_exception(uint8_t slave, uint8_t function,
