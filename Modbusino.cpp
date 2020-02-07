@@ -25,15 +25,24 @@
 
 #define _MODBUS_RTU_CHECKSUM_LENGTH 2
 
-/* As reported in https://github.com/stephane/modbusino/issues/6, the code could
-segfault for longer ADU */
-#define _MODBUSINO_RTU_MAX_ADU_LENGTH 256
-
 /* Supported function codes */
 #define _FC_READ_HOLDING_REGISTERS 0x03
 #define _FC_WRITE_MULTIPLE_REGISTERS 0x10
 
+/*
+ * Read holding registers (fn code 3) has less bytes than write multiple registers (fn code 16)
+ * Address (1 byte)
+ * Function (1 byte) Read holding
+ * 1st register to read (2 bytes)
+ * Nr of registers to read (2 bytes)
+ * CRC (2 bytes)
+ */
+#define _MODBUS_MSG_MIN_BYTES 8
+#define _MODBUS_MSG_WRITE_MULTIPLE_MIN_BYTES 11
+#define _MODBUS_MSG_WRITE_MULTIPLE_LEN_POS 7 //Data bytes length byte
 enum { _STEP_FUNCTION = 0x01, _STEP_META, _STEP_DATA };
+
+Timer modbusMessageTimeoutTimer;
 
 static uint16_t crc16(uint8_t *req, uint8_t req_length)
 {
@@ -54,19 +63,28 @@ static uint16_t crc16(uint8_t *req, uint8_t req_length)
     return (crc << 8 | crc >> 8);
 }
 
-ModbusinoSlave::ModbusinoSlave(uint8_t slave)
+ModbusinoSlave::ModbusinoSlave(uint8_t slave, uint16_t *dataArray = nullptr, uint8_t arrLen=0)
 {
     if (slave >= 0 & slave <= 247) {
         _slave = slave;
     }
+    dataPtr = dataArray;
+    dataRegLen = arrLen;
+    modbusMessageTimeoutTimer.initializeMs(10,TimerDelegate(&ModbusinoSlave::clearBuffer, this));
 }
 
 void ModbusinoSlave::setup(long baud)
 {
+    pinMode(RS485_RE_PIN, OUTPUT);
+    digitalWrite(RS485_RE_PIN, !RS485_TX_LEVEL);
+
     Serial.begin(baud, SERIAL_8N1, SERIAL_FULL);
-	// When any transmission completes, set RE line inactive
+
 	Serial.onTransmitComplete(
 		[](HardwareSerial &) { digitalWrite(RS485_RE_PIN, !RS485_TX_LEVEL); });
+
+	Serial.onDataReceived(StreamDataReceivedDelegate(&ModbusinoSlave::onData, this));
+	clearBuffer();
 }
 
 static int check_integrity(uint8_t *msg, uint8_t msg_length)
@@ -126,110 +144,6 @@ static uint8_t response_exception(uint8_t slave, uint8_t function,
     return rsp_length;
 }
 
-static void flush(void)
-{
-    uint8_t i = 0;
-
-    /* Wait a moment to receive the remaining garbage but avoid getting stuck
-     * because the line is saturated */
-    while (Serial.available() && i++ < 10) {
-        Serial.clear();
-        delay(3);
-    }
-}
-
-static int receive(uint8_t *req, uint8_t _slave)
-{
-    uint8_t i;
-    uint8_t length_to_read;
-    uint8_t req_index;
-    uint8_t step;
-    uint8_t function=0;
-
-    /* We need to analyse the message step by step.  At the first step, we want
-     * to reach the function code because all packets contain this
-     * information. */
-    step = _STEP_FUNCTION;
-    length_to_read = _MODBUS_RTU_FUNCTION + 1;
-
-    req_index = 0;
-    while (length_to_read != 0) {
-
-        /* The timeout is defined to ~10 ms between each bytes.  Precision is
-           not that important so I rather to avoid millis() to apply the KISS
-           principle (millis overflows after 50 days, etc) */
-        if (!Serial.available()) {
-            i = 0;
-            while (!Serial.available()) {
-                if (++i == 10) {
-                    /* Too late, bye */
-                    return -1 - MODBUS_INFORMATIVE_RX_TIMEOUT;
-                }
-                delay(1);
-            }
-        }
-
-        req[req_index] = Serial.read();
-
-        /* Moves the pointer to receive other data */
-        req_index++;
-
-        /* Computes remaining bytes */
-        length_to_read--;
-
-        if (length_to_read == 0) {
-            if (req[_MODBUS_RTU_SLAVE] != _slave
-                && req[_MODBUS_RTU_SLAVE != MODBUS_BROADCAST_ADDRESS]) {
-                flush();
-                return -1 - MODBUS_INFORMATIVE_NOT_FOR_US;
-            }
-
-            switch (step) {
-            case _STEP_FUNCTION:
-                /* Function code position */
-                function = req[_MODBUS_RTU_FUNCTION];
-                if (function == _FC_READ_HOLDING_REGISTERS) {
-                    length_to_read = 4;
-                } else if (function == _FC_WRITE_MULTIPLE_REGISTERS) {
-                    length_to_read = 5;
-                } else {
-                    /* Wait a moment to receive the remaining garbage */
-                    flush();
-                    if (req[_MODBUS_RTU_SLAVE] == _slave
-                        || req[_MODBUS_RTU_SLAVE] == MODBUS_BROADCAST_ADDRESS) {
-                        return -1 - MODBUS_EXCEPTION_ILLEGAL_FUNCTION;
-                    }
-
-                    return -1;
-                }
-                step = _STEP_META;
-                break;
-            case _STEP_META:
-                length_to_read = _MODBUS_RTU_CHECKSUM_LENGTH;
-
-                if (function == _FC_WRITE_MULTIPLE_REGISTERS)
-                    length_to_read += req[_MODBUS_RTU_FUNCTION + 5];
-
-                if ((req_index + length_to_read)
-                    > _MODBUSINO_RTU_MAX_ADU_LENGTH) {
-                    flush();
-                    if (req[_MODBUS_RTU_SLAVE] == _slave
-                        || req[_MODBUS_RTU_SLAVE] == MODBUS_BROADCAST_ADDRESS) {
-                        return -1 - MODBUS_EXCEPTION_ILLEGAL_FUNCTION;
-                    }
-                    return -1;
-                }
-                step = _STEP_DATA;
-                break;
-            default:
-                break;
-            }
-        }
-    }
-    return check_integrity(req, req_index);
-}
-
-
 static void reply(uint16_t *tab_reg, uint16_t nb_reg, uint8_t *req,
                   uint8_t req_length, uint8_t _slave)
 {
@@ -280,22 +194,56 @@ static void reply(uint16_t *tab_reg, uint16_t nb_reg, uint8_t *req,
     send_msg(rsp, rsp_length);
 }
 
-int ModbusinoSlave::loop(uint16_t *tab_reg, uint16_t nb_reg)
+void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
+                            unsigned short availableCharsCount)
 {
     int rc = 0;
-    uint8_t req[_MODBUSINO_RTU_MAX_ADU_LENGTH];
-
-    if (Serial.available()) {
-        rc = receive(req, _slave);
-        if (rc > 0) {
-            reply(tab_reg, nb_reg, req, rc, _slave);
-        }
+    if(modbusMessageTimeoutTimer.isStarted()) {
+    	modbusMessageTimeoutTimer.restart();
+    } else {
+    	modbusMessageTimeoutTimer.startOnce();
     }
 
-    /* Returns a positive value if successful,
-       0 if a slave filtering has occured,
-       -1 if an undefined error has occured,
-       -2 for MODBUS_EXCEPTION_ILLEGAL_FUNCTION
-       etc */
-    return rc;
+    while (availableCharsCount) {
+        if (req_index < (_MODBUSINO_RTU_MAX_ADU_LENGTH - 1)) {
+            req[req_index] = stream.read();
+            req_index++;
+            availableCharsCount--;
+        } else {
+            // clear req, print error
+        	availableCharsCount=0;
+        }
+    }
+    debug_hex(INFO, "ADU", req, req_index);
+    if (req_index < _MODBUS_MSG_MIN_BYTES) {
+        return;
+    }
+
+    if (req[_MODBUS_RTU_SLAVE] != _slave
+        && req[_MODBUS_RTU_SLAVE != MODBUS_BROADCAST_ADDRESS]) {
+    	clearBuffer();
+    	return;
+    }
+
+    if(req[_MODBUS_RTU_FUNCTION] == _FC_READ_HOLDING_REGISTERS) {
+    	//
+    }
+
+    if(req[_MODBUS_RTU_FUNCTION] == _FC_WRITE_MULTIPLE_REGISTERS) {
+    	if(req_index == (req[_MODBUS_MSG_WRITE_MULTIPLE_LEN_POS-1] + _MODBUS_MSG_WRITE_MULTIPLE_MIN_BYTES - 2)) {
+    		rc = check_integrity(req, req_index);
+            if (rc > 0) {
+                reply(dataPtr, dataRegLen, req, rc, _slave);
+            }
+    		return;
+    	}
+    }
+}
+
+void ModbusinoSlave::clearBuffer() {
+	req_index = 0;
+	uint8_t i=0;
+	for(i=0; i<dataRegLen; i++) {
+		dataPtr[i] = 0;
+	}
 }
