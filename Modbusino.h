@@ -38,6 +38,7 @@ public:
     void setup(long baud);
     int loop(uint16_t *tab_reg, uint16_t nb_reg);
     void onData(Stream& stream, char arrivedChar, unsigned short availableCharsCount);
+
 private:
     int _slave;
     uint8_t req[_MODBUSINO_RTU_MAX_ADU_LENGTH] = {0};

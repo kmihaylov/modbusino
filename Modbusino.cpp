@@ -233,7 +233,9 @@ void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
     	if(req_index == (req[_MODBUS_MSG_WRITE_MULTIPLE_LEN_POS-1] + _MODBUS_MSG_WRITE_MULTIPLE_MIN_BYTES - 2)) {
     		rc = check_integrity(req, req_index);
             if (rc > 0) {
-                reply(dataPtr, dataRegLen, req, rc, _slave);
+            	if(dataPtr) {
+            		reply(dataPtr, dataRegLen, req, rc, _slave);
+            	}
             }
     		return;
     	}
@@ -242,8 +244,5 @@ void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
 
 void ModbusinoSlave::clearBuffer() {
 	req_index = 0;
-	uint8_t i=0;
-	for(i=0; i<dataRegLen; i++) {
-		dataPtr[i] = 0;
-	}
+	memset(req, 0,_MODBUSINO_RTU_MAX_ADU_LENGTH);
 }
