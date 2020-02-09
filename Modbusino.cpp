@@ -37,7 +37,7 @@
  * Nr of registers to read (2 bytes)
  * CRC (2 bytes)
  */
-#define _MODBUS_MSG_MIN_BYTES 8
+#define _MODBUS_MSG_READ_HOLDING_BYTES 8
 #define _MODBUS_MSG_WRITE_MULTIPLE_MIN_BYTES 11
 #define _MODBUS_MSG_WRITE_MULTIPLE_LEN_POS 7 //Data bytes length byte
 enum { _STEP_FUNCTION = 0x01, _STEP_META, _STEP_DATA };
@@ -73,6 +73,12 @@ ModbusinoSlave::ModbusinoSlave(uint8_t slave, uint16_t *dataArray = nullptr, uin
     modbusMessageTimeoutTimer.initializeMs(10,TimerDelegate(&ModbusinoSlave::clearBuffer, this));
 }
 
+ModbusinoSlave::~ModbusinoSlave() {
+	modbusMessageTimeoutTimer.stop();
+	dataPtr = nullptr;
+	rxCallback = nullptr;
+}
+
 void ModbusinoSlave::setup(long baud)
 {
     pinMode(RS485_RE_PIN, OUTPUT);
@@ -85,6 +91,10 @@ void ModbusinoSlave::setup(long baud)
 
 	Serial.onDataReceived(StreamDataReceivedDelegate(&ModbusinoSlave::onData, this));
 	clearBuffer();
+}
+
+void ModbusinoSlave::setRxCallback(void (*callback)(void)) {
+	rxCallback = callback;
 }
 
 static int check_integrity(uint8_t *msg, uint8_t msg_length)
@@ -215,7 +225,7 @@ void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
         }
     }
     debug_hex(INFO, "ADU", req, req_index);
-    if (req_index < _MODBUS_MSG_MIN_BYTES) {
+    if (req_index < _MODBUS_MSG_READ_HOLDING_BYTES) {
         return;
     }
 
@@ -226,7 +236,18 @@ void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
     }
 
     if(req[_MODBUS_RTU_FUNCTION] == _FC_READ_HOLDING_REGISTERS) {
-    	//
+    	if(req_index == _MODBUS_MSG_READ_HOLDING_BYTES) {
+    		rc = check_integrity(req, req_index);
+            if (rc > 0) {
+            	if(dataPtr) {
+            		reply(dataPtr, dataRegLen, req, rc, _slave);
+            		if(rxCallback) {
+            			rxCallback();
+            		}
+            	}
+            }
+    		return;
+    	}
     }
 
     if(req[_MODBUS_RTU_FUNCTION] == _FC_WRITE_MULTIPLE_REGISTERS) {
@@ -235,6 +256,9 @@ void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
             if (rc > 0) {
             	if(dataPtr) {
             		reply(dataPtr, dataRegLen, req, rc, _slave);
+            		if(rxCallback) {
+            			rxCallback();
+            		}
             	}
             }
     		return;

@@ -35,6 +35,8 @@ segfault for longer ADU */
 class ModbusinoSlave {
 public:
     ModbusinoSlave(uint8_t slave, uint16_t *, uint8_t);
+    ~ModbusinoSlave();
+    void setRxCallback(void (*callback)(void) = nullptr);
     void setup(long baud);
     int loop(uint16_t *tab_reg, uint16_t nb_reg);
     void onData(Stream& stream, char arrivedChar, unsigned short availableCharsCount);
@@ -45,6 +47,7 @@ private:
     uint8_t req_index = 0;
     uint16_t *dataPtr = nullptr;
     uint8_t dataRegLen = 0;
+    void (*rxCallback)(void) = nullptr;
     void clearBuffer(void);
 };
 
