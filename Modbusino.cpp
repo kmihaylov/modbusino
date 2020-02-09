@@ -241,9 +241,6 @@ void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
             if (rc > 0) {
             	if(dataPtr) {
             		reply(dataPtr, dataRegLen, req, rc, _slave);
-            		if(rxCallback) {
-            			rxCallback();
-            		}
             	}
             }
     		return;
