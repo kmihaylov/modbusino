@@ -32,6 +32,8 @@
 segfault for longer ADU */
 #define _MODBUSINO_RTU_MAX_ADU_LENGTH 256
 
+void transmitCompleteCb(HardwareSerial &);
+
 class ModbusinoSlave {
 public:
     ModbusinoSlave(uint8_t slave, uint16_t *, uint8_t);

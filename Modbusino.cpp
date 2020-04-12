@@ -43,6 +43,7 @@
 enum { _STEP_FUNCTION = 0x01, _STEP_META, _STEP_DATA };
 
 Timer modbusMessageTimeoutTimer;
+uint8_t remainingTransmissions=2;
 
 static uint16_t crc16(uint8_t *req, uint8_t req_length)
 {
@@ -86,15 +87,21 @@ void ModbusinoSlave::setup(long baud)
 
     Serial.begin(baud, SERIAL_8N1, SERIAL_FULL);
 
-	Serial.onTransmitComplete(
-		[](HardwareSerial &) { digitalWrite(RS485_RE_PIN, !RS485_TX_LEVEL); });
-
+	Serial.onTransmitComplete(transmitCompleteCb);
 	Serial.onDataReceived(StreamDataReceivedDelegate(&ModbusinoSlave::onData, this));
 	clearBuffer();
 }
 
 void ModbusinoSlave::setRxCallback(void (*callback)(void)) {
 	rxCallback = callback;
+}
+
+void transmitCompleteCb(HardwareSerial &) {
+	remainingTransmissions--;
+	debugf("Remainig: %d", remainingTransmissions);
+	if(remainingTransmissions==0) {
+		digitalWrite(RS485_RE_PIN, !RS485_TX_LEVEL);
+	}
 }
 
 static int check_integrity(uint8_t *msg, uint8_t msg_length)
@@ -133,11 +140,11 @@ static void send_msg(uint8_t *msg, uint8_t msg_length)
 
 	// Set RE active, add a one-character delay before and after message
 	digitalWrite(RS485_RE_PIN, RS485_TX_LEVEL);
+	remainingTransmissions=2;
 	constexpr uint8_t NUL{0};
 	Serial.write(NUL);
 	Serial.write(msg, msg_length);
 	Serial.write(NUL);
-
 	// RE is set inactive by Serial transmit-complete callback
 }
 
