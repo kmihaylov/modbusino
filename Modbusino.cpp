@@ -43,7 +43,6 @@
 enum { _STEP_FUNCTION = 0x01, _STEP_META, _STEP_DATA };
 
 Timer modbusMessageTimeoutTimer;
-uint8_t remainingTransmissions=2;
 
 static uint16_t crc16(uint8_t *req, uint8_t req_length)
 {
@@ -62,6 +61,12 @@ static uint16_t crc16(uint8_t *req, uint8_t req_length)
     }
 
     return (crc << 8 | crc >> 8);
+}
+
+void uartCallback(uart_t* uart, uint32_t status) {
+	if(status & _BV(UIFE)) {
+		digitalWrite(RS485_RE_PIN, LOW);
+	}
 }
 
 ModbusinoSlave::ModbusinoSlave(uint8_t slave, uint16_t *dataArray = nullptr, uint8_t arrLen=0)
@@ -88,6 +93,7 @@ void ModbusinoSlave::setup(long baud)
     Serial.begin(baud, SERIAL_8N1, SERIAL_FULL);
 
 	Serial.onTransmitComplete(transmitCompleteCb);
+	//Serial.setUartCallback(uartCallback);
 	Serial.onDataReceived(StreamDataReceivedDelegate(&ModbusinoSlave::onData, this));
 	clearBuffer();
 }
@@ -97,11 +103,7 @@ void ModbusinoSlave::setRxCallback(void (*callback)(void)) {
 }
 
 void transmitCompleteCb(HardwareSerial &) {
-	remainingTransmissions--;
-	debugf("Remainig: %d", remainingTransmissions);
-	if(remainingTransmissions==0) {
 		digitalWrite(RS485_RE_PIN, !RS485_TX_LEVEL);
-	}
 }
 
 static int check_integrity(uint8_t *msg, uint8_t msg_length)
@@ -133,18 +135,16 @@ static int build_response_basis(uint8_t slave, uint8_t function, uint8_t *rsp)
 
 static void send_msg(uint8_t *msg, uint8_t msg_length)
 {
-    uint16_t crc = crc16(msg, msg_length);
+	uint16_t crc = crc16(msg, msg_length);
 
-    msg[msg_length++] = crc >> 8;
-    msg[msg_length++] = crc & 0x00FF;
+	msg[msg_length++] = crc >> 8;
+	msg[msg_length++] = crc & 0x00FF;
 
 	// Set RE active, add a one-character delay before and after message
 	digitalWrite(RS485_RE_PIN, RS485_TX_LEVEL);
-	remainingTransmissions=2;
 	constexpr uint8_t NUL{0};
-	Serial.write(NUL);
+	msg[msg_length++] = NUL;
 	Serial.write(msg, msg_length);
-	Serial.write(NUL);
 	// RE is set inactive by Serial transmit-complete callback
 }
 
@@ -243,8 +243,8 @@ void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
     }
 
     if(req[_MODBUS_RTU_FUNCTION] == _FC_READ_HOLDING_REGISTERS) {
-    	if(req_index == _MODBUS_MSG_READ_HOLDING_BYTES) {
-    		rc = check_integrity(req, req_index);
+    	if(req_index >= _MODBUS_MSG_READ_HOLDING_BYTES) {
+    		rc = check_integrity(req, _MODBUS_MSG_READ_HOLDING_BYTES);
             if (rc > 0) {
             	if(dataPtr) {
             		reply(dataPtr, dataRegLen, req, rc, _slave);
@@ -255,8 +255,8 @@ void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
     }
 
     if(req[_MODBUS_RTU_FUNCTION] == _FC_WRITE_MULTIPLE_REGISTERS) {
-    	if(req_index == (req[_MODBUS_MSG_WRITE_MULTIPLE_LEN_POS-1] + _MODBUS_MSG_WRITE_MULTIPLE_MIN_BYTES - 2)) {
-    		rc = check_integrity(req, req_index);
+    	if(req_index >= (req[_MODBUS_MSG_WRITE_MULTIPLE_LEN_POS-1] + _MODBUS_MSG_WRITE_MULTIPLE_MIN_BYTES - 2)) {
+    		rc = check_integrity(req, req[_MODBUS_MSG_WRITE_MULTIPLE_LEN_POS-1] + _MODBUS_MSG_WRITE_MULTIPLE_MIN_BYTES - 2);
             if (rc > 0) {
             	if(dataPtr) {
             		reply(dataPtr, dataRegLen, req, rc, _slave);
