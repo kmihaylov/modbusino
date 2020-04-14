@@ -248,6 +248,7 @@ void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
             if (rc > 0) {
             	if(dataPtr) {
             		reply(dataPtr, dataRegLen, req, rc, _slave);
+            		clearBuffer();
             	}
             }
     		return;
@@ -260,6 +261,7 @@ void ModbusinoSlave::onData(Stream &stream, char arrivedChar,
             if (rc > 0) {
             	if(dataPtr) {
             		reply(dataPtr, dataRegLen, req, rc, _slave);
+            		clearBuffer();
             		if(rxCallback) {
             			rxCallback();
             		}
