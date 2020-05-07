@@ -63,12 +63,6 @@ static uint16_t crc16(uint8_t *req, uint8_t req_length)
     return (crc << 8 | crc >> 8);
 }
 
-void uartCallback(uart_t* uart, uint32_t status) {
-	if(status & _BV(UIFE)) {
-		digitalWrite(RS485_RE_PIN, LOW);
-	}
-}
-
 ModbusinoSlave::ModbusinoSlave(uint8_t slave, uint16_t *dataArray = nullptr, uint8_t arrLen=0)
 {
     if (slave >= 0 & slave <= 247) {
@@ -93,7 +87,6 @@ void ModbusinoSlave::setup(long baud)
     Serial.begin(baud, SERIAL_8N1, SERIAL_FULL);
 
 	Serial.onTransmitComplete(transmitCompleteCb);
-	//Serial.setUartCallback(uartCallback);
 	Serial.onDataReceived(StreamDataReceivedDelegate(&ModbusinoSlave::onData, this));
 	clearBuffer();
 }
